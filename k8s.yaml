@@ -17,7 +17,8 @@ spec:
           image: shortener:v3
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8000
+            - name: http
+              containerPort: 8000
           env:
             - name: REDIS_ADDR
               value: "redis:6379"
@@ -38,3 +39,15 @@ spec:
     - port: 80
       targetPort: 8000
       nodePort: 30080
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: shortener
+spec:
+  selector:
+    matchLabels:
+      app: shortener
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics

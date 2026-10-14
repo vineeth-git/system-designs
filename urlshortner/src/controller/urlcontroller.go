@@ -4,13 +4,23 @@ import (
 	"encoding/json"
 	"urlshorner/models"
 	"fmt"
+	"sync/atomic"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 )
 
 type Controller struct {
 	store *models.Store
+	totalRequests uint64
+	req *prometheus.CounterVec
 }
 func NewController(store *models.Store) *Controller {
-	return &Controller{store: store}
+	var reqs = promauto.NewCounterVec(
+		prometheus.CounterOpts{Name: "shortener_requests_total"},
+		[]string{"route"},
+	)	
+	return &Controller{store: store, totalRequests: 0, req: reqs}
 }
 func (c *Controller) handleErr(w http.ResponseWriter, r *http.Request, err string, status int) { 
 	http.Error(w, err, status)
@@ -21,6 +31,8 @@ func (c *Controller) handleOk(w http.ResponseWriter, r *http.Request, response m
 }
 
 func (c *Controller) HandleGenerateShortURL(w http.ResponseWriter, r *http.Request) {
+	c.req.WithLabelValues("shorten").Inc()
+
 	var request struct {
 		URL string `json:"url"`
 	}
@@ -41,6 +53,7 @@ func (c *Controller) HandleGenerateShortURL(w http.ResponseWriter, r *http.Reque
 }
 
 func (c *Controller) HandleGetFullURL(w http.ResponseWriter, r *http.Request) {
+	c.req.WithLabelValues("get").Inc()
 	code := r.PathValue("code")
 	if longUrl, err := c.store.Get(r.Context(), code); err != nil {
 		http.NotFound(w, r)
@@ -52,4 +65,19 @@ func (c *Controller) HandleGetFullURL(w http.ResponseWriter, r *http.Request) {
 		})
 		// http.Redirect(w, r, longUrl, http.StatusFound)
 	}
+}
+
+func (c *Controller) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+	count := atomic.LoadUint64(&c.totalRequests)
+	fmt.Fprintf(w, "# TYPE http_requests_total counter\n")
+	fmt.Fprintf(w, "http_requests_total %d\n", count)
+}
+
+func (c *Controller) CounterMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			atomic.AddUint64(&c.totalRequests, 1)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
